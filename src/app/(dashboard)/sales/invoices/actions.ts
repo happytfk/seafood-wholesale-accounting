@@ -42,6 +42,8 @@ export type CreateInvoiceState = {
   message: string | null;
 };
 
+export type ChangeInvoiceStatus = "draft" | "confirmed" | "cancelled";
+
 function toNumber(input: FormDataEntryValue | null): number {
   const value = Number(String(input ?? "").trim());
   if (!Number.isFinite(value)) {
@@ -151,6 +153,69 @@ async function deductInventoryForInvoice(params: {
       }
 
       remaining -= deductQty;
+    }
+  }
+
+  return { ok: true };
+}
+
+async function restoreInventoryForCancelledInvoice(params: {
+  supabase: ReturnType<typeof createAdminClient>;
+  invoiceId: string;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { supabase, invoiceId } = params;
+
+  const { data: saleOutMovements, error: movementsError } = await supabase
+    .from("inventory_movements")
+    .select("id, batch_id, product_id, quantity_delta, unit")
+    .eq("reference_table", "sales_invoices")
+    .eq("reference_id", invoiceId)
+    .eq("movement_type", "sale_out");
+
+  if (movementsError) {
+    return { ok: false, message: `讀取扣庫存流水失敗：${movementsError.message}` };
+  }
+
+  for (const movement of saleOutMovements ?? []) {
+    const deductedQty = Number(movement.quantity_delta ?? 0);
+    if (deductedQty >= 0) {
+      continue;
+    }
+    if (!movement.batch_id) {
+      return { ok: false, message: "存在缺少 batch_id 的扣庫存流水，無法回補" };
+    }
+    const restoreQty = -deductedQty;
+
+    const { data: batchRow, error: batchError } = await supabase
+      .from("inventory_batches")
+      .select("id, quantity_remaining")
+      .eq("id", movement.batch_id)
+      .single();
+    if (batchError || !batchRow) {
+      return { ok: false, message: batchError?.message ?? "找不到對應批次，無法回補庫存" };
+    }
+
+    const nextRemaining = Number(batchRow.quantity_remaining ?? 0) + restoreQty;
+    const { error: updateBatchError } = await supabase
+      .from("inventory_batches")
+      .update({ quantity_remaining: nextRemaining })
+      .eq("id", movement.batch_id);
+    if (updateBatchError) {
+      return { ok: false, message: `回補批次庫存失敗：${updateBatchError.message}` };
+    }
+
+    const { error: reverseMovementError } = await supabase.from("inventory_movements").insert({
+      batch_id: movement.batch_id,
+      product_id: movement.product_id,
+      movement_type: "adjustment",
+      quantity_delta: restoreQty,
+      unit: movement.unit,
+      reference_table: "sales_invoices",
+      reference_id: invoiceId,
+      notes: "發票作廢自動回補庫存",
+    });
+    if (reverseMovementError) {
+      return { ok: false, message: `寫入回補流水失敗：${reverseMovementError.message}` };
     }
   }
 
@@ -393,4 +458,60 @@ export async function createInvoice(
   revalidatePath("/inventory/batches");
   revalidatePath("/inventory/movements");
   return { ok: true, message: `已建立草稿發票 ${invoiceNo}（${lineRows.length} 行）` };
+}
+
+export async function changeInvoiceStatus(
+  invoiceId: string,
+  targetStatus: ChangeInvoiceStatus,
+): Promise<{ ok: boolean; message: string }> {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, message: "請先在 .env.local 設定 Supabase" };
+  }
+
+  const supabase = createAdminClient();
+  const { data: invoice, error: invoiceError } = await supabase
+    .from("sales_invoices")
+    .select("id, invoice_no, status, amount_paid")
+    .eq("id", invoiceId)
+    .single();
+  if (invoiceError || !invoice) {
+    return { ok: false, message: invoiceError?.message ?? "找不到發票" };
+  }
+
+  if (invoice.status === targetStatus) {
+    return { ok: true, message: `發票 ${invoice.invoice_no} 已是 ${targetStatus}` };
+  }
+
+  if (targetStatus === "confirmed") {
+    if (invoice.status !== "draft") {
+      return { ok: false, message: "只有草稿發票可以確認" };
+    }
+  }
+
+  if (targetStatus === "cancelled") {
+    if (Number(invoice.amount_paid ?? 0) > 0) {
+      return { ok: false, message: "已有收款紀錄，請先沖銷收款後再作廢" };
+    }
+    const restoreResult = await restoreInventoryForCancelledInvoice({
+      supabase,
+      invoiceId: invoice.id,
+    });
+    if (!restoreResult.ok) {
+      return { ok: false, message: restoreResult.message };
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from("sales_invoices")
+    .update({ status: targetStatus })
+    .eq("id", invoice.id);
+  if (updateError) {
+    return { ok: false, message: updateError.message };
+  }
+
+  revalidatePath("/sales/invoices");
+  revalidatePath("/sales/ar");
+  revalidatePath("/inventory/batches");
+  revalidatePath("/inventory/movements");
+  return { ok: true, message: `已更新發票 ${invoice.invoice_no} 狀態為 ${targetStatus}` };
 }
