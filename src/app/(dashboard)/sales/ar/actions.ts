@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { requireRole } from "@/lib/auth/session";
 import { createAdminClient, isSupabaseConfigured } from "@/lib/supabase/admin";
 
 export type ArCustomerOption = {
@@ -215,6 +216,12 @@ export async function addPaymentReceipt(
   _prev: AddReceiptState,
   formData: FormData,
 ): Promise<AddReceiptState> {
+  try {
+    await requireRole(["owner", "accountant", "manager"]);
+  } catch {
+    return { ok: false, message: "你無權限登記收款" };
+  }
+
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "請先在 .env.local 設定 Supabase" };
   }
