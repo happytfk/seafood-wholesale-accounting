@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { requireRole } from "@/lib/auth/session";
 import { computeNetWeight, lineTotalFromNetWeight } from "@/lib/units/hk-catty-tael";
 import { createAdminClient, isSupabaseConfigured } from "@/lib/supabase/admin";
 
@@ -301,6 +302,12 @@ export async function createInvoice(
   _prev: CreateInvoiceState,
   formData: FormData,
 ): Promise<CreateInvoiceState> {
+  try {
+    await requireRole(["owner", "accountant", "manager", "staff"]);
+  } catch {
+    return { ok: false, message: "你無權限建立發票" };
+  }
+
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "請先在 .env.local 設定 Supabase" };
   }
@@ -501,6 +508,16 @@ export async function changeInvoiceStatus(
   invoiceId: string,
   targetStatus: ChangeInvoiceStatus,
 ): Promise<{ ok: boolean; message: string }> {
+  const allowedRoles =
+    targetStatus === "cancelled"
+      ? (["owner", "accountant"] as const)
+      : (["owner", "accountant", "manager"] as const);
+  try {
+    await requireRole([...allowedRoles]);
+  } catch {
+    return { ok: false, message: "你無權限更改此發票狀態" };
+  }
+
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "請先在 .env.local 設定 Supabase" };
   }
