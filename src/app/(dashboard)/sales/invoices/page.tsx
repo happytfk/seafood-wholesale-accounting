@@ -1,5 +1,6 @@
 import { SupabaseSetupHint } from "@/components/customers/supabase-setup-hint";
 import { CreateInvoiceForm } from "@/components/sales/create-invoice-form";
+import Link from "next/link";
 import { getInvoicePageData } from "./actions";
 
 function statusLabel(status: string): string {
@@ -82,6 +83,7 @@ export default async function SalesInvoicesPage() {
                   <th className="px-3 py-2 font-medium">客戶</th>
                   <th className="px-3 py-2 font-medium">狀態</th>
                   <th className="px-3 py-2 font-medium">總額</th>
+                  <th className="px-3 py-2 font-medium">列印</th>
                 </tr>
               </thead>
               <tbody>
@@ -95,6 +97,14 @@ export default async function SalesInvoicesPage() {
                     </td>
                     <td className="px-3 py-2 font-medium">
                       HKD {Number(invoice.total_amount).toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Link
+                        href={`/sales/invoices/${invoice.id}/print`}
+                        className="text-primary text-xs underline-offset-4 hover:underline"
+                      >
+                        開啟列印版
+                      </Link>
                     </td>
                   </tr>
                 ))}
