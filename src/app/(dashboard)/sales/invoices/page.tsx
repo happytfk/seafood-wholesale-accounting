@@ -1,5 +1,6 @@
 import { SupabaseSetupHint } from "@/components/customers/supabase-setup-hint";
 import { CreateInvoiceForm } from "@/components/sales/create-invoice-form";
+import { InvoiceStatusActions } from "@/components/sales/invoice-status-actions";
 import Link from "next/link";
 import { getInvoicePageData } from "./actions";
 
@@ -83,6 +84,7 @@ export default async function SalesInvoicesPage() {
                   <th className="px-3 py-2 font-medium">客戶</th>
                   <th className="px-3 py-2 font-medium">狀態</th>
                   <th className="px-3 py-2 font-medium">總額</th>
+                  <th className="px-3 py-2 font-medium">流程</th>
                   <th className="px-3 py-2 font-medium">列印</th>
                 </tr>
               </thead>
@@ -97,6 +99,9 @@ export default async function SalesInvoicesPage() {
                     </td>
                     <td className="px-3 py-2 font-medium">
                       HKD {Number(invoice.total_amount).toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <InvoiceStatusActions invoiceId={invoice.id} status={invoice.status} />
                     </td>
                     <td className="px-3 py-2">
                       <Link
