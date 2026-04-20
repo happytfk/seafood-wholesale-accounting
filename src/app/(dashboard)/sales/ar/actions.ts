@@ -26,6 +26,15 @@ export type MonthlyStatementSummary = {
   closingBalance: number;
 };
 
+export type ArAgingSummary = {
+  current: number;
+  bucket0To30: number;
+  bucket31To60: number;
+  bucket61To90: number;
+  bucket90Plus: number;
+  totalOutstanding: number;
+};
+
 export type ReceivableInvoiceOption = {
   id: string;
   invoice_no: string;
@@ -46,6 +55,7 @@ export type MonthlyStatementResult =
       selectedCustomerId: string;
       selectedCustomerName: string;
       summary: MonthlyStatementSummary;
+      aging: ArAgingSummary;
       invoices: MonthlyInvoiceRow[];
       receivableInvoices: ReceivableInvoiceOption[];
     }
@@ -113,6 +123,14 @@ export async function getMonthlyStatement(params: {
         periodInvoiced: 0,
         periodPaid: 0,
         closingBalance: 0,
+      },
+      aging: {
+        current: 0,
+        bucket0To30: 0,
+        bucket31To60: 0,
+        bucket61To90: 0,
+        bucket90Plus: 0,
+        totalOutstanding: 0,
       },
       invoices: [],
       receivableInvoices: [],
@@ -187,6 +205,42 @@ export async function getMonthlyStatement(params: {
   const openingBalance = openingInvoiced - openingPaid;
   const closingBalance = openingBalance + periodInvoiced - periodPaid;
 
+  const asOfDate = new Date(`${endExclusive}T00:00:00Z`);
+  asOfDate.setUTCDate(asOfDate.getUTCDate() - 1);
+
+  const aging: ArAgingSummary = {
+    current: 0,
+    bucket0To30: 0,
+    bucket31To60: 0,
+    bucket61To90: 0,
+    bucket90Plus: 0,
+    totalOutstanding: 0,
+  };
+
+  const receivableInvoices = (receivableInvoicesResult.data ?? []) as ReceivableInvoiceOption[];
+  for (const invoice of receivableInvoices) {
+    const balance = Number(invoice.balance_due ?? 0);
+    if (balance <= 0) continue;
+
+    const invoiceDate = new Date(`${invoice.invoice_date}T00:00:00Z`);
+    const dayDiff = Math.floor(
+      (asOfDate.getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24),
+    );
+
+    if (dayDiff < 0) {
+      aging.current += balance;
+    } else if (dayDiff <= 30) {
+      aging.bucket0To30 += balance;
+    } else if (dayDiff <= 60) {
+      aging.bucket31To60 += balance;
+    } else if (dayDiff <= 90) {
+      aging.bucket61To90 += balance;
+    } else {
+      aging.bucket90Plus += balance;
+    }
+    aging.totalOutstanding += balance;
+  }
+
   return {
     ok: true,
     month,
@@ -199,8 +253,9 @@ export async function getMonthlyStatement(params: {
       periodPaid,
       closingBalance,
     },
+    aging,
     invoices: (periodInvoicesResult.data ?? []) as MonthlyInvoiceRow[],
-    receivableInvoices: (receivableInvoicesResult.data ?? []) as ReceivableInvoiceOption[],
+    receivableInvoices,
   };
 }
 
