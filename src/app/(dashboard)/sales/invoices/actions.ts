@@ -34,6 +34,13 @@ export type InvoicePageDataResult =
       customers: CustomerOption[];
       products: ProductOption[];
       invoices: InvoiceRow[];
+      filters: {
+        q: string;
+        status: "all" | "draft" | "confirmed" | "cancelled";
+        customerId: string;
+        fromDate: string;
+        toDate: string;
+      };
     }
   | { ok: false; code: "not_configured" }
   | { ok: false; code: "db_error"; message: string };
@@ -240,10 +247,26 @@ async function restoreInventoryForCancelledInvoice(params: {
   return { ok: true };
 }
 
-export async function getInvoicePageData(): Promise<InvoicePageDataResult> {
+export async function getInvoicePageData(params?: {
+  q?: string;
+  status?: string;
+  customerId?: string;
+  fromDate?: string;
+  toDate?: string;
+}): Promise<InvoicePageDataResult> {
   if (!isSupabaseConfigured()) {
     return { ok: false, code: "not_configured" };
   }
+
+  const q = String(params?.q ?? "").trim();
+  const statusInput = String(params?.status ?? "all").trim();
+  const status =
+    statusInput === "draft" || statusInput === "confirmed" || statusInput === "cancelled"
+      ? statusInput
+      : "all";
+  const customerId = String(params?.customerId ?? "").trim();
+  const fromDate = String(params?.fromDate ?? "").trim();
+  const toDate = String(params?.toDate ?? "").trim();
 
   const supabase = createAdminClient();
 
@@ -258,11 +281,32 @@ export async function getInvoicePageData(): Promise<InvoicePageDataResult> {
       .select("id, name, spec, sale_unit, is_active")
       .eq("is_active", true)
       .order("name", { ascending: true }),
-    supabase
-      .from("sales_invoices")
-      .select("id, invoice_no, invoice_date, total_amount, status, customers(name)")
-      .order("created_at", { ascending: false })
-      .limit(10),
+    (async () => {
+      let query = supabase
+        .from("sales_invoices")
+        .select("id, invoice_no, invoice_date, total_amount, status, customer_id, customers(name)")
+        .order("invoice_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (status !== "all") {
+        query = query.eq("status", status);
+      }
+      if (customerId) {
+        query = query.eq("customer_id", customerId);
+      }
+      if (fromDate) {
+        query = query.gte("invoice_date", fromDate);
+      }
+      if (toDate) {
+        query = query.lte("invoice_date", toDate);
+      }
+      if (q) {
+        query = query.ilike("invoice_no", `%${q}%`);
+      }
+
+      return query;
+    })(),
   ]);
 
   if (customersResult.error) {
@@ -275,7 +319,7 @@ export async function getInvoicePageData(): Promise<InvoicePageDataResult> {
     return { ok: false, code: "db_error", message: invoicesResult.error.message };
   }
 
-  const invoices: InvoiceRow[] = (invoicesResult.data ?? []).map((row) => {
+  const mappedInvoices: InvoiceRow[] = (invoicesResult.data ?? []).map((row) => {
     const customerCell = row.customers as { name: string } | { name: string }[] | null;
     const customerName = Array.isArray(customerCell)
       ? (customerCell[0]?.name ?? "—")
@@ -289,12 +333,27 @@ export async function getInvoicePageData(): Promise<InvoicePageDataResult> {
       status: row.status,
     };
   });
+  const keyword = q.toLowerCase();
+  const invoices = keyword
+    ? mappedInvoices.filter(
+        (invoice) =>
+          invoice.invoice_no.toLowerCase().includes(keyword) ||
+          invoice.customer_name.toLowerCase().includes(keyword),
+      )
+    : mappedInvoices;
 
   return {
     ok: true,
     customers: (customersResult.data ?? []) as CustomerOption[],
     products: (productsResult.data ?? []) as ProductOption[],
     invoices,
+    filters: {
+      q,
+      status,
+      customerId,
+      fromDate,
+      toDate,
+    },
   };
 }
 

@@ -1,8 +1,17 @@
 import { SupabaseSetupHint } from "@/components/customers/supabase-setup-hint";
 import { CreateInvoiceForm } from "@/components/sales/create-invoice-form";
 import { InvoiceStatusActions } from "@/components/sales/invoice-status-actions";
+import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { getInvoicePageData } from "./actions";
+
+type SearchParams = Promise<{
+  q?: string;
+  status?: string;
+  customerId?: string;
+  fromDate?: string;
+  toDate?: string;
+}>;
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
@@ -13,8 +22,15 @@ function statusLabel(status: string): string {
   return map[status] ?? status;
 }
 
-export default async function SalesInvoicesPage() {
-  const result = await getInvoicePageData();
+export default async function SalesInvoicesPage(props: { searchParams: SearchParams }) {
+  const searchParams = await props.searchParams;
+  const result = await getInvoicePageData({
+    q: searchParams.q,
+    status: searchParams.status,
+    customerId: searchParams.customerId,
+    fromDate: searchParams.fromDate,
+    toDate: searchParams.toDate,
+  });
 
   if (result.ok === false && result.code === "not_configured") {
     return (
@@ -47,6 +63,15 @@ export default async function SalesInvoicesPage() {
   const customers = result.ok ? result.customers : [];
   const products = result.ok ? result.products : [];
   const invoices = result.ok ? result.invoices : [];
+  const filters = result.ok
+    ? result.filters
+    : {
+        q: "",
+        status: "all" as const,
+        customerId: "",
+        fromDate: "",
+        toDate: "",
+      };
 
   return (
     <div className="space-y-8">
@@ -71,9 +96,99 @@ export default async function SalesInvoicesPage() {
       )}
 
       <div className="space-y-2">
-        <h2 className="text-sm font-medium">最近發票</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">發票列表（可搜尋/篩選）</h2>
+          <p className="text-muted-foreground text-xs">最多顯示 50 筆</p>
+        </div>
+        <form
+          method="get"
+          className="bg-card grid gap-3 rounded-xl border p-4 md:grid-cols-6 md:items-end"
+        >
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="q" className="text-muted-foreground text-xs font-medium">
+              搜尋（發票號 / 客戶）
+            </label>
+            <input
+              id="q"
+              name="q"
+              type="text"
+              defaultValue={filters.q}
+              placeholder="例如 SI-20260420"
+              className="border-input bg-background focus-visible:ring-ring/50 h-8 w-full rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3 dark:bg-input/30"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="status" className="text-muted-foreground text-xs font-medium">
+              狀態
+            </label>
+            <select
+              id="status"
+              name="status"
+              defaultValue={filters.status}
+              className="border-input bg-background focus-visible:ring-ring/50 h-8 w-full rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3 dark:bg-input/30"
+            >
+              <option value="all">全部</option>
+              <option value="draft">草稿</option>
+              <option value="confirmed">已確認</option>
+              <option value="cancelled">已作廢</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="customerId" className="text-muted-foreground text-xs font-medium">
+              客戶
+            </label>
+            <select
+              id="customerId"
+              name="customerId"
+              defaultValue={filters.customerId}
+              className="border-input bg-background focus-visible:ring-ring/50 h-8 w-full rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3 dark:bg-input/30"
+            >
+              <option value="">全部客戶</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="fromDate" className="text-muted-foreground text-xs font-medium">
+              由
+            </label>
+            <input
+              id="fromDate"
+              name="fromDate"
+              type="date"
+              defaultValue={filters.fromDate}
+              className="border-input bg-background focus-visible:ring-ring/50 h-8 w-full rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3 dark:bg-input/30"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="toDate" className="text-muted-foreground text-xs font-medium">
+              到
+            </label>
+            <input
+              id="toDate"
+              name="toDate"
+              type="date"
+              defaultValue={filters.toDate}
+              className="border-input bg-background focus-visible:ring-ring/50 h-8 w-full rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3 dark:bg-input/30"
+            />
+          </div>
+          <div className="md:col-span-6 flex gap-2">
+            <Button type="submit" size="sm">
+              套用篩選
+            </Button>
+            <Link
+              href="/sales/invoices"
+              className="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium"
+            >
+              清除
+            </Link>
+          </div>
+        </form>
         {invoices.length === 0 ? (
-          <p className="text-muted-foreground text-sm">暫未有發票，請先用上方表單建立草稿發票。</p>
+          <p className="text-muted-foreground text-sm">無符合條件發票（可調整搜尋/篩選條件）。</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full min-w-[680px] text-left text-sm">

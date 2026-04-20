@@ -1,6 +1,7 @@
 import { SupabaseSetupHint } from "@/components/customers/supabase-setup-hint";
 import { AddPaymentReceiptForm } from "@/components/sales/add-payment-receipt-form";
 import { MonthlyStatementFilter } from "@/components/sales/monthly-statement-filter";
+import Link from "next/link";
 import { getMonthlyStatement } from "./actions";
 
 type SearchParams = Promise<{
@@ -89,6 +90,18 @@ export default async function AccountsReceivablePage(props: { searchParams: Sear
         customerId={result.selectedCustomerId}
         customers={result.customers}
       />
+      {result.selectedCustomerId ? (
+        <div>
+          <Link
+            href={`/sales/ar/export?month=${encodeURIComponent(result.month)}&customerId=${encodeURIComponent(
+              result.selectedCustomerId,
+            )}`}
+            className="text-primary text-xs underline-offset-4 hover:underline"
+          >
+            匯出月結 CSV
+          </Link>
+        </div>
+      ) : null}
 
       {result.selectedCustomerId ? (
         <>
