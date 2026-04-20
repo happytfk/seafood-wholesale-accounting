@@ -68,6 +68,95 @@ function createInvoiceNo(): string {
   return `SI-${parts.join("")}`;
 }
 
+type DeductionLine = {
+  productId: string;
+  unit: "piece" | "jin" | "catty" | "kg";
+  quantity: number;
+};
+
+async function deductInventoryForInvoice(params: {
+  supabase: ReturnType<typeof createAdminClient>;
+  invoiceId: string;
+  lines: DeductionLine[];
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { supabase, invoiceId, lines } = params;
+
+  // Merge lines by product+unit to perform FIFO deductions once per bucket.
+  const bucketMap = new Map<string, { productId: string; unit: DeductionLine["unit"]; required: number }>();
+  for (const line of lines) {
+    if (line.quantity <= 0) continue;
+    const key = `${line.productId}:${line.unit}`;
+    const existing = bucketMap.get(key);
+    if (existing) {
+      existing.required += line.quantity;
+    } else {
+      bucketMap.set(key, { productId: line.productId, unit: line.unit, required: line.quantity });
+    }
+  }
+
+  for (const bucket of bucketMap.values()) {
+    const { data: batches, error: batchError } = await supabase
+      .from("inventory_batches")
+      .select("id, batch_code, quantity_remaining")
+      .eq("product_id", bucket.productId)
+      .eq("unit", bucket.unit)
+      .gt("quantity_remaining", 0)
+      .order("received_at", { ascending: true });
+
+    if (batchError) {
+      return { ok: false, message: `扣庫存失敗：${batchError.message}` };
+    }
+
+    const fifoBatches = batches ?? [];
+    const totalAvailable = fifoBatches.reduce(
+      (sum, batch) => sum + Number(batch.quantity_remaining ?? 0),
+      0,
+    );
+    if (totalAvailable < bucket.required) {
+      return {
+        ok: false,
+        message: `庫存不足（產品 ${bucket.productId}，單位 ${bucket.unit}）：需要 ${bucket.required.toFixed(
+          3,
+        )}，可用 ${totalAvailable.toFixed(3)}`,
+      };
+    }
+
+    let remaining = bucket.required;
+    for (const batch of fifoBatches) {
+      if (remaining <= 0) break;
+      const available = Number(batch.quantity_remaining ?? 0);
+      const deductQty = Math.min(remaining, available);
+      if (deductQty <= 0) continue;
+
+      const { error: updateBatchError } = await supabase
+        .from("inventory_batches")
+        .update({ quantity_remaining: available - deductQty })
+        .eq("id", batch.id);
+      if (updateBatchError) {
+        return { ok: false, message: `更新庫存批次失敗：${updateBatchError.message}` };
+      }
+
+      const { error: movementError } = await supabase.from("inventory_movements").insert({
+        batch_id: batch.id,
+        product_id: bucket.productId,
+        movement_type: "sale_out",
+        quantity_delta: -deductQty,
+        unit: bucket.unit,
+        reference_table: "sales_invoices",
+        reference_id: invoiceId,
+        notes: `發票自動扣庫存`,
+      });
+      if (movementError) {
+        return { ok: false, message: `寫入庫存流水失敗：${movementError.message}` };
+      }
+
+      remaining -= deductQty;
+    }
+  }
+
+  return { ok: true };
+}
+
 export async function getInvoicePageData(): Promise<InvoicePageDataResult> {
   if (!isSupabaseConfigured()) {
     return { ok: false, code: "not_configured" };
@@ -284,6 +373,24 @@ export async function createInvoice(
     return { ok: false, message: lineError.message };
   }
 
+  const deductionResult = await deductInventoryForInvoice({
+    supabase,
+    invoiceId: createdInvoice.id,
+    lines: lineRows.map((line) => ({
+      productId: line.product_id,
+      unit: line.unit,
+      quantity: line.net_weight,
+    })),
+  });
+  if (!deductionResult.ok) {
+    // Best-effort rollback when auto-deduction fails.
+    await supabase.from("sales_invoice_lines").delete().eq("invoice_id", createdInvoice.id);
+    await supabase.from("sales_invoices").delete().eq("id", createdInvoice.id);
+    return { ok: false, message: deductionResult.message };
+  }
+
   revalidatePath("/sales/invoices");
+  revalidatePath("/inventory/batches");
+  revalidatePath("/inventory/movements");
   return { ok: true, message: `已建立草稿發票 ${invoiceNo}（${lineRows.length} 行）` };
 }
