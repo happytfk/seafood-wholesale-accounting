@@ -61,6 +61,16 @@ export default async function AccountsReceivablePage(props: { searchParams: Sear
 
   const invoices = result.ok ? result.invoices : [];
   const receivableInvoices = result.ok ? result.receivableInvoices : [];
+  const aging = result.ok
+    ? result.aging
+    : {
+        current: 0,
+        bucket0To30: 0,
+        bucket31To60: 0,
+        bucket61To90: 0,
+        bucket90Plus: 0,
+        totalOutstanding: 0,
+      };
   const summary = result.ok
     ? result.summary
     : { openingBalance: 0, periodInvoiced: 0, periodPaid: 0, closingBalance: 0 };
@@ -99,6 +109,35 @@ export default async function AccountsReceivablePage(props: { searchParams: Sear
               <p className="text-muted-foreground text-xs">期末結餘</p>
               <p className="text-lg font-semibold">{money(summary.closingBalance)}</p>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-sm font-medium">應收帳齡（Aging）</h2>
+            <div className="grid gap-3 md:grid-cols-5">
+              <div className="bg-card rounded-xl border p-4">
+                <p className="text-muted-foreground text-xs">當期 / 未到期</p>
+                <p className="text-lg font-semibold">{money(aging.current)}</p>
+              </div>
+              <div className="bg-card rounded-xl border p-4">
+                <p className="text-muted-foreground text-xs">0-30 日</p>
+                <p className="text-lg font-semibold">{money(aging.bucket0To30)}</p>
+              </div>
+              <div className="bg-card rounded-xl border p-4">
+                <p className="text-muted-foreground text-xs">31-60 日</p>
+                <p className="text-lg font-semibold">{money(aging.bucket31To60)}</p>
+              </div>
+              <div className="bg-card rounded-xl border p-4">
+                <p className="text-muted-foreground text-xs">61-90 日</p>
+                <p className="text-lg font-semibold">{money(aging.bucket61To90)}</p>
+              </div>
+              <div className="bg-card rounded-xl border p-4">
+                <p className="text-muted-foreground text-xs">90+ 日</p>
+                <p className="text-lg font-semibold">{money(aging.bucket90Plus)}</p>
+              </div>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              應收總額：<span className="text-foreground font-medium">{money(aging.totalOutstanding)}</span>
+            </p>
           </div>
 
           <div className="space-y-2">
