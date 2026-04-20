@@ -56,18 +56,35 @@ function toNumberList(values: FormDataEntryValue[]): number[] {
   return values.map((value) => toNumber(value));
 }
 
-function createInvoiceNo(): string {
-  const now = new Date();
-  const parts = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-    "-",
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-    String(now.getSeconds()).padStart(2, "0"),
-  ];
-  return `SI-${parts.join("")}`;
+function todayKey(date: Date): string {
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+async function createReadableInvoiceNo(
+  supabase: ReturnType<typeof createAdminClient>,
+  date: Date,
+): Promise<{ ok: true; invoiceNo: string } | { ok: false; message: string }> {
+  const dayKey = todayKey(date);
+  const prefix = `SI-${dayKey}-`;
+
+  const { data, error } = await supabase
+    .from("sales_invoices")
+    .select("invoice_no")
+    .ilike("invoice_no", `${prefix}%`)
+    .order("invoice_no", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    return { ok: false, message: `生成發票號失敗：${error.message}` };
+  }
+
+  const latest = data?.[0]?.invoice_no ?? null;
+  const lastSeq = latest ? Number(String(latest).slice(prefix.length)) : 0;
+  const nextSeq = Number.isFinite(lastSeq) ? lastSeq + 1 : 1;
+  const readableNo = `${prefix}${String(nextSeq).padStart(4, "0")}`;
+  return { ok: true, invoiceNo: readableNo };
 }
 
 type DeductionLine = {
@@ -402,28 +419,48 @@ export async function createInvoice(
     }
   }
 
-  const invoiceNo = createInvoiceNo();
-  const { data: createdInvoice, error: invoiceError } = await supabase
-    .from("sales_invoices")
-    .insert({
-      invoice_no: invoiceNo,
-      customer_id: customer.id,
-      payment_term: customer.payment_term,
-      status: "draft",
-      subtotal,
-      discount_amount: 0,
-      tax_amount: 0,
-      total_amount: subtotal,
-      notes,
-    })
-    .select("id")
-    .single();
+  let createdInvoice: { id: string } | null = null;
+  let invoiceNo = "";
+  const maxInsertRetries = 5;
 
-  if (invoiceError || !createdInvoice) {
-    return {
-      ok: false,
-      message: invoiceError?.message ?? "建立發票失敗，請稍後再試",
-    };
+  for (let attempt = 0; attempt < maxInsertRetries; attempt += 1) {
+    const invoiceNoResult = await createReadableInvoiceNo(supabase, new Date());
+    if (!invoiceNoResult.ok) {
+      return { ok: false, message: invoiceNoResult.message };
+    }
+    invoiceNo = invoiceNoResult.invoiceNo;
+
+    const { data: inserted, error: invoiceError } = await supabase
+      .from("sales_invoices")
+      .insert({
+        invoice_no: invoiceNo,
+        customer_id: customer.id,
+        payment_term: customer.payment_term,
+        status: "draft",
+        subtotal,
+        discount_amount: 0,
+        tax_amount: 0,
+        total_amount: subtotal,
+        notes,
+      })
+      .select("id")
+      .single();
+
+    if (!invoiceError && inserted) {
+      createdInvoice = inserted as { id: string };
+      break;
+    }
+
+    // Unique conflict: concurrent invoice creation may claim same sequence. Retry.
+    if (invoiceError?.code === "23505") {
+      continue;
+    }
+
+    return { ok: false, message: invoiceError?.message ?? "建立發票失敗，請稍後再試" };
+  }
+
+  if (!createdInvoice) {
+    return { ok: false, message: "發票號已被佔用，請稍後再試" };
   }
 
   const { error: lineError } = await supabase.from("sales_invoice_lines").insert(
