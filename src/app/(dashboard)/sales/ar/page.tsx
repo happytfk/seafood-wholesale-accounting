@@ -1,4 +1,5 @@
 import { SupabaseSetupHint } from "@/components/customers/supabase-setup-hint";
+import { AddPaymentReceiptForm } from "@/components/sales/add-payment-receipt-form";
 import { MonthlyStatementFilter } from "@/components/sales/monthly-statement-filter";
 import { getMonthlyStatement } from "./actions";
 
@@ -59,6 +60,7 @@ export default async function AccountsReceivablePage(props: { searchParams: Sear
   }
 
   const invoices = result.ok ? result.invoices : [];
+  const receivableInvoices = result.ok ? result.receivableInvoices : [];
   const summary = result.ok
     ? result.summary
     : { openingBalance: 0, periodInvoiced: 0, periodPaid: 0, closingBalance: 0 };
@@ -97,6 +99,19 @@ export default async function AccountsReceivablePage(props: { searchParams: Sear
               <p className="text-muted-foreground text-xs">期末結餘</p>
               <p className="text-lg font-semibold">{money(summary.closingBalance)}</p>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-sm font-medium">收款登記</h2>
+            {receivableInvoices.length === 0 ? (
+              <p className="text-muted-foreground text-sm">目前無可收款發票（可能已全部收妥）。</p>
+            ) : (
+              <AddPaymentReceiptForm
+                month={result.month}
+                customerId={result.selectedCustomerId}
+                receivableInvoices={receivableInvoices}
+              />
+            )}
           </div>
 
           <div className="space-y-2">
