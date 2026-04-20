@@ -50,6 +50,10 @@ function toNumber(input: FormDataEntryValue | null): number {
   return value;
 }
 
+function toNumberList(values: FormDataEntryValue[]): number[] {
+  return values.map((value) => toNumber(value));
+}
+
 function createInvoiceNo(): string {
   const now = new Date();
   const parts = [
@@ -131,26 +135,40 @@ export async function createInvoice(
   }
 
   const customerId = String(formData.get("customer_id") ?? "");
-  const productId = String(formData.get("product_id") ?? "");
   if (!customerId) {
     return { ok: false, message: "請先選擇客戶" };
   }
-  if (!productId) {
-    return { ok: false, message: "請先選擇產品" };
+  const productIds = formData
+    .getAll("line_product_id")
+    .map((v) => String(v ?? "").trim())
+    .filter(Boolean);
+  if (productIds.length === 0) {
+    return { ok: false, message: "請至少新增一行產品" };
   }
 
-  let grossWeight = 0;
-  let basketWeight = 0;
-  let moistureDeduction = 0;
-  let unitPrice = 0;
+  let grossWeights: number[] = [];
+  let basketWeights: number[] = [];
+  let moistureDeductions: number[] = [];
+  let unitPrices: number[] = [];
   try {
-    grossWeight = toNumber(formData.get("gross_weight"));
-    basketWeight = toNumber(formData.get("basket_weight"));
-    moistureDeduction = toNumber(formData.get("moisture_deduction"));
-    unitPrice = toNumber(formData.get("unit_price"));
+    grossWeights = toNumberList(formData.getAll("line_gross_weight"));
+    basketWeights = toNumberList(formData.getAll("line_basket_weight"));
+    moistureDeductions = toNumberList(formData.getAll("line_moisture_deduction"));
+    unitPrices = toNumberList(formData.getAll("line_unit_price"));
   } catch (error) {
     const message = error instanceof Error ? error.message : "欄位格式錯誤";
     return { ok: false, message };
+  }
+
+  if (
+    !(
+      productIds.length === grossWeights.length &&
+      productIds.length === basketWeights.length &&
+      productIds.length === moistureDeductions.length &&
+      productIds.length === unitPrices.length
+    )
+  ) {
+    return { ok: false, message: "行資料不完整，請檢查每行產品、重量與單價" };
   }
 
   const notes = String(formData.get("notes") ?? "").trim() || null;
@@ -165,31 +183,69 @@ export async function createInvoice(
     return { ok: false, message: customerError?.message ?? "找不到客戶資料" };
   }
 
-  const { data: product, error: productError } = await supabase
+  const { data: products, error: productError } = await supabase
     .from("products")
     .select("id, name, spec, sale_unit")
-    .eq("id", productId)
-    .single();
-  if (productError || !product) {
+    .in("id", productIds);
+  if (productError || !products || products.length === 0) {
     return { ok: false, message: productError?.message ?? "找不到產品資料" };
   }
+  const productMap = new Map(products.map((product) => [product.id, product]));
 
-  let netWeight = 0;
-  let lineTotal = 0;
-  try {
-    netWeight = computeNetWeight({
-      grossWeight,
-      basketTare: basketWeight,
-      moistureDeduction,
-    });
-    lineTotal = lineTotalFromNetWeight({
-      netWeight,
-      unitPrice,
-      netWeightFractionDigits: 3,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "重量資料錯誤";
-    return { ok: false, message };
+  const lineRows: Array<{
+    line_no: number;
+    product_id: string;
+    name: string;
+    spec: string | null;
+    unit: "piece" | "jin" | "catty" | "kg";
+    unit_price: number;
+    gross_weight: number;
+    basket_weight: number;
+    moisture_deduction: number;
+    net_weight: number;
+    line_total: number;
+  }> = [];
+
+  let subtotal = 0;
+  for (let idx = 0; idx < productIds.length; idx += 1) {
+    const product = productMap.get(productIds[idx]);
+    if (!product) {
+      return { ok: false, message: `第 ${idx + 1} 行產品不存在或已停用` };
+    }
+    const grossWeight = grossWeights[idx];
+    const basketWeight = basketWeights[idx];
+    const moistureDeduction = moistureDeductions[idx];
+    const unitPrice = unitPrices[idx];
+
+    try {
+      const netWeight = computeNetWeight({
+        grossWeight,
+        basketTare: basketWeight,
+        moistureDeduction,
+      });
+      const lineTotal = lineTotalFromNetWeight({
+        netWeight,
+        unitPrice,
+        netWeightFractionDigits: 3,
+      });
+      subtotal += lineTotal;
+      lineRows.push({
+        line_no: idx + 1,
+        product_id: product.id,
+        name: product.name,
+        spec: product.spec,
+        unit: product.sale_unit,
+        unit_price: unitPrice,
+        gross_weight: grossWeight,
+        basket_weight: basketWeight,
+        moisture_deduction: moistureDeduction,
+        net_weight: netWeight,
+        line_total: lineTotal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "重量資料錯誤";
+      return { ok: false, message: `第 ${idx + 1} 行：${message}` };
+    }
   }
 
   const invoiceNo = createInvoiceNo();
@@ -200,10 +256,10 @@ export async function createInvoice(
       customer_id: customer.id,
       payment_term: customer.payment_term,
       status: "draft",
-      subtotal: lineTotal,
+      subtotal,
       discount_amount: 0,
       tax_amount: 0,
-      total_amount: lineTotal,
+      total_amount: subtotal,
       notes,
     })
     .select("id")
@@ -216,20 +272,12 @@ export async function createInvoice(
     };
   }
 
-  const { error: lineError } = await supabase.from("sales_invoice_lines").insert({
-    invoice_id: createdInvoice.id,
-    line_no: 1,
-    product_id: product.id,
-    name: product.name,
-    spec: product.spec,
-    unit: product.sale_unit,
-    unit_price: unitPrice,
-    gross_weight: grossWeight,
-    basket_weight: basketWeight,
-    moisture_deduction: moistureDeduction,
-    net_weight: netWeight,
-    line_total: lineTotal,
-  });
+  const { error: lineError } = await supabase.from("sales_invoice_lines").insert(
+    lineRows.map((line) => ({
+      ...line,
+      invoice_id: createdInvoice.id,
+    })),
+  );
 
   if (lineError) {
     await supabase.from("sales_invoices").delete().eq("id", createdInvoice.id);
@@ -237,5 +285,5 @@ export async function createInvoice(
   }
 
   revalidatePath("/sales/invoices");
-  return { ok: true, message: `已建立草稿發票 ${invoiceNo}` };
+  return { ok: true, message: `已建立草稿發票 ${invoiceNo}（${lineRows.length} 行）` };
 }

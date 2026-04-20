@@ -51,7 +51,7 @@ export default async function SalesInvoicesPage() {
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">銷售開單</h1>
         <p className="text-muted-foreground text-sm">
-          第一版先支援單行發票：客戶、產品、毛重、籃重、水份扣減、單價與小計。
+          第二版支援多行明細：同一張發票可加入多個產品，並逐行計算淨重與金額。
         </p>
       </div>
 
@@ -71,7 +71,7 @@ export default async function SalesInvoicesPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-medium">最近發票</h2>
         {invoices.length === 0 ? (
-          <p className="text-muted-foreground text-sm">暫未有發票，請先用上方表單建立草稿。</p>
+          <p className="text-muted-foreground text-sm">暫未有發票，請先用上方表單建立草稿發票。</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full min-w-[680px] text-left text-sm">
