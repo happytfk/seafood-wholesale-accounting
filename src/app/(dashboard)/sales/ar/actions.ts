@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createAdminClient, isSupabaseConfigured } from "@/lib/supabase/admin";
 
 export type ArCustomerOption = {
@@ -24,6 +25,18 @@ export type MonthlyStatementSummary = {
   closingBalance: number;
 };
 
+export type ReceivableInvoiceOption = {
+  id: string;
+  invoice_no: string;
+  invoice_date: string;
+  balance_due: number;
+};
+
+export type AddReceiptState = {
+  ok: boolean;
+  message: string | null;
+};
+
 export type MonthlyStatementResult =
   | {
       ok: true;
@@ -33,6 +46,7 @@ export type MonthlyStatementResult =
       selectedCustomerName: string;
       summary: MonthlyStatementSummary;
       invoices: MonthlyInvoiceRow[];
+      receivableInvoices: ReceivableInvoiceOption[];
     }
   | { ok: false; code: "not_configured" }
   | { ok: false; code: "db_error"; message: string };
@@ -100,12 +114,14 @@ export async function getMonthlyStatement(params: {
         closingBalance: 0,
       },
       invoices: [],
+      receivableInvoices: [],
     };
   }
 
   const selectedCustomerName = customers.find((c) => c.id === selectedCustomerId)?.name ?? "";
 
-  const [allInvoicesResult, periodInvoicesResult, receiptsResult] = await Promise.all([
+  const [allInvoicesResult, periodInvoicesResult, receiptsResult, receivableInvoicesResult] =
+    await Promise.all([
     supabase
       .from("sales_invoices")
       .select("id, invoice_date, total_amount, status")
@@ -123,7 +139,13 @@ export async function getMonthlyStatement(params: {
       .select("amount, received_at, sales_invoices!inner(customer_id, status)")
       .eq("sales_invoices.customer_id", selectedCustomerId)
       .neq("sales_invoices.status", "cancelled"),
-  ]);
+    supabase
+      .from("sales_invoice_ar")
+      .select("id, invoice_no, invoice_date, balance_due")
+      .eq("customer_id", selectedCustomerId)
+      .gt("balance_due", 0)
+      .order("invoice_date", { ascending: true }),
+    ]);
 
   if (allInvoicesResult.error) {
     return { ok: false, code: "db_error", message: allInvoicesResult.error.message };
@@ -133,6 +155,9 @@ export async function getMonthlyStatement(params: {
   }
   if (receiptsResult.error) {
     return { ok: false, code: "db_error", message: receiptsResult.error.message };
+  }
+  if (receivableInvoicesResult.error) {
+    return { ok: false, code: "db_error", message: receivableInvoicesResult.error.message };
   }
 
   const allInvoices = allInvoicesResult.data ?? [];
@@ -174,5 +199,80 @@ export async function getMonthlyStatement(params: {
       closingBalance,
     },
     invoices: (periodInvoicesResult.data ?? []) as MonthlyInvoiceRow[],
+    receivableInvoices: (receivableInvoicesResult.data ?? []) as ReceivableInvoiceOption[],
   };
+}
+
+function toNumber(input: FormDataEntryValue | null): number {
+  const value = Number(String(input ?? "").trim());
+  if (!Number.isFinite(value)) {
+    throw new TypeError("請輸入有效金額");
+  }
+  return value;
+}
+
+export async function addPaymentReceipt(
+  _prev: AddReceiptState,
+  formData: FormData,
+): Promise<AddReceiptState> {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, message: "請先在 .env.local 設定 Supabase" };
+  }
+
+  const invoiceId = String(formData.get("invoice_id") ?? "").trim();
+  const method = String(formData.get("method") ?? "cash").trim();
+  const referenceNo = String(formData.get("reference_no") ?? "").trim() || null;
+  const notes = String(formData.get("notes") ?? "").trim() || null;
+  const receivedDate = String(formData.get("received_date") ?? "").trim();
+  const month = String(formData.get("month") ?? "").trim();
+  const customerId = String(formData.get("customer_id") ?? "").trim();
+
+  if (!invoiceId) {
+    return { ok: false, message: "請選擇發票" };
+  }
+
+  let amount = 0;
+  try {
+    amount = toNumber(formData.get("amount"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "請輸入有效金額";
+    return { ok: false, message };
+  }
+  if (amount <= 0) {
+    return { ok: false, message: "收款金額必須大於 0" };
+  }
+
+  const supabase = createAdminClient();
+  const { data: arRow, error: arError } = await supabase
+    .from("sales_invoice_ar")
+    .select("id, invoice_no, balance_due")
+    .eq("id", invoiceId)
+    .single();
+  if (arError || !arRow) {
+    return { ok: false, message: arError?.message ?? "找不到發票或發票已作廢" };
+  }
+  if (amount > Number(arRow.balance_due)) {
+    return {
+      ok: false,
+      message: `收款金額不可大於未收餘額（${Number(arRow.balance_due).toFixed(2)}）`,
+    };
+  }
+
+  const { error: insertError } = await supabase.from("payment_receipts").insert({
+    invoice_id: invoiceId,
+    amount,
+    method,
+    reference_no: referenceNo,
+    notes,
+    received_at: receivedDate ? `${receivedDate}T12:00:00+08:00` : new Date().toISOString(),
+  });
+
+  if (insertError) {
+    return { ok: false, message: insertError.message };
+  }
+
+  void month;
+  void customerId;
+  revalidatePath("/sales/ar");
+  return { ok: true, message: `已登記收款（發票 ${arRow.invoice_no}）` };
 }
