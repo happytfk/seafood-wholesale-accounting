@@ -1,36 +1,31 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 海鮮批發會計系統
 
-## Getting Started
+Next.js（App Router）+ Tailwind CSS v4 + shadcn/ui，後端規劃為 Supabase。專案已建立於本機目錄（非 Cursor 安裝磁碟）。
 
-First, run the development server:
+## 路徑
+
+預設位置：`/Users/chunmingyuen/seafood-wholesale-accounting`
+
+在 Cursor 請用 **File → Open Folder** 開啟上述資料夾，即可編輯與執行。
+
+## 指令
 
 ```bash
+cd /Users/chunmingyuen/seafood-wholesale-accounting
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+瀏覽器開啟 [http://localhost:3000](http://localhost:3000)（會導向 `/dashboard`）。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 已包含
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **側邊欄導航**（繁體中文、`src/components/app-sidebar.tsx`、`src/lib/navigation.ts`）
+- **港斤／兩換算與籃重淨重**（`src/lib/units/hk-catty-tael.ts`，16 兩 = 1 斤）
+- **Supabase 初始 SQL**（`supabase/migrations/20260420000000_initial_schema.sql`）
+- **深色高對比**（`src/app/layout.tsx` 使用 `className="dark"`）
 
-## Learn More
+## 後續
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 連接 Supabase 專案並執行 migration
+- 開單表單：毛重、**籃重（皮重）**、水份扣減 → `computeNetWeight`
+- 可選：PWA、離線佇列與同步
